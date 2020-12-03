@@ -1,6 +1,7 @@
 from config import version
 from re import findall
 from re import sub
+from re import fullmatch
 from exceptions import *
 from database import Person
 from database import Phone
@@ -9,55 +10,67 @@ from peewee import IntegrityError
 from datetime import datetime
 
 
+def normalize(line):
+    line = sub(r'^\s*', '', line)
+    line = sub(r'\s*$', '', line)
+    line = sub(r'\s+', ' ', line)
+    line = sub(r'\\$', ' ', line)  # стоит ли
+    return line
+
+
+def find_one(pattern, string, flags):
+    result = findall(pattern=pattern, string=string, flags=flags)
+    return result[0] if result else None
+
+
+def normalize_input(func):
+    def wrapper(line):
+        line = normalize(line)
+        if line:
+            return func(line)
+        else:
+            raise EmptyInput
+
+    return wrapper
+
+
 class Validation:
+
     @staticmethod
+    @normalize_input
     def name(line):
-        if line:
-            if result := findall(r"^\s*([a-zA-Z0-9\s\-]+?)\s*$", line):
-                result = result[0]
-                result = ' '.join(word.title() for word in result.split())
-                return result
-            else:
-                raise SpecialSymbols
+        if result := fullmatch(r"[a-zA-Z0-9\s\-]+", line):
+            string = result.string
+            string = ' '.join(word.title() for word in string.split())
+            return string
         else:
-            raise EmptyInput
+            raise SpecialSymbols
 
     @staticmethod
+    @normalize_input
     def phone_number(line):
-        line = sub(r'^\s*', '', line)
-        line = sub(r'\s*$', '', line)
         line = sub(r'^\+7', '8', line)
-        if line:
-            if findall(r"^([0-9]+)$", line):
-                if result := findall(r"^([0-9]{11})$", line):
-                    result = result[0]
-                    return result
-                else:
-                    raise NotElevenDigits
-            else:
-                raise NotOnlyDigits
+        if result := fullmatch(r"\d{11}", line):
+            return result.string
+        elif fullmatch(r"\d+", line):
+            raise NotElevenDigits(len(line))
         else:
-            raise EmptyInput
+            raise NotOnlyDigits
 
     @staticmethod
+    @normalize_input
     def birth_date(line):
-        line = sub(r'^\s*', '', line)
-        line = sub(r'\s*$', '', line)
-        if line:
-            if result := findall(r'^\d\d[.\\/]\d\d[.\\/]\d\d\d\d', line):
-                result = result[0]
-                day, month, year = result.split('.')
+        line = sub(r'[\\/-]', '.', line)
+        if result := fullmatch(r'[\d]{1,2}[.][\d]{1,2}[.]\d{4}', line):
+            string = result.string
+            day, month, year = map(int, string.split('.'))
+            try:
                 date = datetime(year, month, day)
-                if date.day == day and date.month == month and date.year == year:
-                    pass
-                else:
-                    raise NonExistentDate
-            else:
-                raise DataFormat
+                return date
+            except ValueError:
+                raise NonExistentDate
         else:
-            raise EmptyInput
-
-
+            raise WrongDateFormat
 
 
 class CLI:
@@ -68,21 +81,13 @@ class CLI:
             try:
                 line = input(f"Enter {name} >> ")
                 result = validation(line)
-            except SpecialSymbols:
-                print("[input error] Do not use special characters")
-            except NotOnlyDigits:
-                print('[input error] There can be only digits in the number record')
-            except NotElevenDigits:
-                print('[input error] There must be 11 digits in the number record')
-            except EmptyInput:
+            except EmptyInput as e:
                 if may_be_empty:
                     result = ""
                 else:
-                    print('[input error] Empty input, please, try again')
-            except DataFormat:
-                print('[input error] Вы ввели дату в неверном формате dd.mm.yyyy')
-            except NonExistentDate:
-                print('[error] You entered a non-existent date')
+                    e.print()
+            except (SpecialSymbols, NotOnlyDigits, WrongDateFormat, NonExistentDate, NotElevenDigits) as e:
+                e.print()
         return result
 
     @staticmethod
@@ -98,11 +103,15 @@ if __name__ == '__main__':
     print(f"Phonebook by @6a16ec v {version}")
     while True:
         command = input(f"Enter command >> ")
-        if command == 'добавить новую запись' or command == '0':
+        command = normalize(command)
+        if command == '0':
             first_name, last_name = CLI.get_names()
-            birth_date = CLI.get_field("birth sate", Validation.birth_date, may_be_empty=True)
+            birth_date = CLI.get_field("birth date", Validation.birth_date, may_be_empty=True)
             try:
-                person = Person.create(first_name=first_name, last_name=last_name)
+                if birth_date:
+                    person = Person.create(first_name=first_name, last_name=last_name, birth_date=birth_date)
+                else:
+                    person = Person.create(first_name=first_name, last_name=last_name)
                 phone_number = CLI.get_field("phone number", Validation.phone_number)
                 try:
                     Phone.create(number=phone_number, owner=person)
@@ -119,7 +128,12 @@ if __name__ == '__main__':
                     first_name, last_name = CLI.get_names()
                     person.update(first_name=first_name, last_name=last_name)
         elif command == '1':
-            print()
+            persons = Person.select().execute()
+            for person in persons:
+                phones = person.phones
+                print(f"{person.first_name} {person.last_name} {person.birth_date} ({len(phones)} phones): ")
+                for phone in phones:
+                    print(f"\t{phone.number} {phone.type}")
         #         phones_amount = len(person.phones)
         #         print(f"The person was found, he has {phones_amount} numbers.")
         #

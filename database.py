@@ -11,6 +11,7 @@ class BaseModel(Model):
 class Person(BaseModel):
     first_name = CharField()
     last_name = CharField()
+    birth_date = DateField(null=True)
 
     class Meta:
         pass
