@@ -116,7 +116,7 @@ class MainState:
 class MainMenu(MainState):
     def __init__(self):
         super().__init__()
-        print('Main Menu: 1 - new contact, 2 - show all, 13 - quit')
+        print('Main Menu: 1 - new contact, 2 - show all, 3 - search in phonebook 13 - quit')
 
     def loop(self):
         event = self.read_event()
@@ -126,6 +126,28 @@ class MainMenu(MainState):
             persons = Person.select().execute()
             for i, person in enumerate(persons):
                 print(f'{i + 1}.', person)
+        elif event == '3':
+            params = {
+                Person.first_name: CLI.get_field("first name", Validation.name, may_be_empty=True),
+                Person.last_name: CLI.get_field("last name", Validation.name, may_be_empty=True),
+                Person.birth_date: CLI.get_field("birth date", Validation.birth_date, may_be_empty=True),
+                Phone.number: CLI.get_field("phone number", Validation.phone_number, may_be_empty=True)
+            }
+            params = {key: value for (key, value) in params.items() if value}
+            expressions = [
+                key == value
+                for (key, value) in params.items()
+            ]
+            if expressions:
+                persons = Person.select().join(Phone).where(*expressions)
+                if persons:
+                    for person in persons:
+                        print(person)
+                else:
+                    print("None of the records were found")
+            else:
+                print("You haven't introduced any filters")
+            self.next_state = MainMenu()
         elif event == '13':
             self.next_state = True
             self.quit = True
@@ -150,9 +172,6 @@ class AddNewContact(MainState):
                 person.update(birth_date=birth_date)
             print(">> Person successfully added")
             self.next_state = CreatePhone(person)
-
-            # print(">> Person successfully added")
-            # self.next_state = MainMenu()
 
 
 class CreatePhone(MainState):
@@ -220,7 +239,7 @@ class UpdateUser(MainState):
 if __name__ == '__main__':
     db.connect()
     db.create_tables([Person, Phone])
-    print(f"Phonebook by @6a16ec v {version}")
+    print(f"Phonebook by @6a16ec v{version}")
     current = MainMenu()
     while True:
         while current.next_state is None:

@@ -1,5 +1,5 @@
 from peewee import SqliteDatabase
 
 
-version = "1.0.2"
+version = "1.0.3"
 db = SqliteDatabase('./phonebook.db')
