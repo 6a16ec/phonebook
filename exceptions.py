@@ -37,7 +37,7 @@ class WrongDateFormat(MyException):
         self.message = "You entered the date in the wrong format, the correct format: dd.mm.yyyy"
 
 
-class NonExistentDate(Exception):
+class NonExistentDate(MyException):
     def __init__(self):
         super().__init__()
         self.message = "You entered a non-existent date"

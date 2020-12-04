@@ -5,9 +5,11 @@ from re import fullmatch
 from exceptions import *
 from database import Person
 from database import Phone
+from peewee import DoesNotExist
 from config import db
 from peewee import IntegrityError
 from datetime import datetime
+from datetime import date
 
 
 def normalize(line):
@@ -72,6 +74,12 @@ class Validation:
         else:
             raise WrongDateFormat
 
+    @staticmethod
+    @normalize_input
+    def phone_type(line):
+        result = fullmatch(r'.+', line)
+        return result.string
+
 
 class CLI:
     @staticmethod
@@ -79,7 +87,8 @@ class CLI:
         result = None
         while result is None:
             try:
-                line = input(f"Enter {name} >> ")
+                welcome_line = f'Enter {name} >> ' if not may_be_empty else f'Enter {name} (press enter to skip) >> '
+                line = input(welcome_line)
                 result = validation(line)
             except EmptyInput as e:
                 if may_be_empty:
@@ -116,7 +125,10 @@ class MainState:
 class MainMenu(MainState):
     def __init__(self):
         super().__init__()
-        print('Main Menu: 1 - new contact, 2 - show all, 3 - search in phonebook 13 - quit')
+        print()
+        print('[<< - M A I N  -  M E N U - >>]')
+        print('1 - new contact, 2 - show all, 3 - search in phonebook, 4 - delete contact')
+        print('5 - age of person, 6 - change contact, 13 - quit')
 
     def loop(self):
         event = self.read_event()
@@ -126,6 +138,7 @@ class MainMenu(MainState):
             persons = Person.select().execute()
             for i, person in enumerate(persons):
                 print(f'{i + 1}.', person)
+            self.next_state = MainMenu()
         elif event == '3':
             params = {
                 Person.first_name: CLI.get_field("first name", Validation.name, may_be_empty=True),
@@ -148,6 +161,42 @@ class MainMenu(MainState):
             else:
                 print("You haven't introduced any filters")
             self.next_state = MainMenu()
+        elif event == '4':
+            first_name = CLI.get_field("first name", Validation.name)
+            last_name = CLI.get_field("last name", Validation.name)
+            try:
+                person = Person.get(Person.first_name == first_name, Person.last_name == last_name)
+            except DoesNotExist:
+                print("There is no such contact")
+            else:
+                person.delete_instance(recursive=True)
+                print("This contact has been successfully removed")
+        elif event == '5':
+            first_name = CLI.get_field("first name", Validation.name)
+            last_name = CLI.get_field("last name", Validation.name)
+            try:
+                person = Person.get(Person.first_name == first_name, Person.last_name == last_name)
+            except DoesNotExist:
+                print('>> Person does not exist')
+                self.next_state = MainMenu()
+            else:
+                birth_date = person.birth_date
+                if birth_date is not None:
+                    age = int((date.today() - birth_date).total_seconds() / 60 / 60 / 24 / 365)
+                    print(f'>> Age: {age}')
+                else:
+                    print('>> Date of Birth is not specified')
+                self.next_state = MainMenu()
+        elif event == '6':
+            first_name = CLI.get_field("first name", Validation.name)
+            last_name = CLI.get_field("last name", Validation.name)
+            try:
+                person = Person.get(Person.first_name == first_name, Person.last_name == last_name)
+            except DoesNotExist:
+                print('>> Person does not exist')
+                self.next_state = MainMenu()
+            else:
+                self.next_state = UpdateUser(person)
         elif event == '13':
             self.next_state = True
             self.quit = True
@@ -169,23 +218,45 @@ class AddNewContact(MainState):
         else:
             birth_date = CLI.get_field("birth date", Validation.birth_date, may_be_empty=True)
             if birth_date is not None:
-                person.update(birth_date=birth_date)
+                person.birth_date = birth_date
+                person.save()
             print(">> Person successfully added")
-            self.next_state = CreatePhone(person)
+            self.next_state = CreatePhone(person, phone_type="default")
 
 
 class CreatePhone(MainState):
-    def __init__(self, person):
+    def __init__(self, person, phone_type=None):
         super().__init__()
         self.person = person
+        self.phone_type = phone_type
 
     def loop(self):
         phone_number = CLI.get_field("phone number", Validation.phone_number)
+        self.next_state = AddNewPhone(self.person, phone_number, self.phone_type)
+
+
+class AddNewPhone(MainState):
+    def __init__(self, person, phone_number, phone_type):
+        super().__init__()
+        self.person = person
+        self.phone_number = phone_number
+        self.phone_type = phone_type
+
+    def loop(self):
+        phone_number = self.phone_number
+        phone_type = self.phone_type
+        if phone_type is None:
+            phone_type = CLI.get_field("phone type", Validation.phone_type)
         try:
-            Phone.create(number=phone_number, owner=self.person)
+            Phone.create(number=phone_number, owner=self.person, type=phone_type)
         except IntegrityError:
-            phone = Phone.get(Phone.number == phone_number)
-            self.next_state = PhoneAlreadyInUse(self.person, phone)
+            try:
+                phone = Phone.get(Phone.number == phone_number)
+            except DoesNotExist:
+                print(">> Busy phone type for this user")
+                self.phone_type = None
+            else:
+                self.next_state = PhoneAlreadyInUse(self.person, phone)
         else:
             print(">> Phone successfully added")
             self.next_state = MainMenu()
@@ -218,18 +289,32 @@ class UpdateUser(MainState):
     def __init__(self, person):
         super().__init__()
         self.person = person
-        print("1 - change birth date, 2 - change phone number, "
+        print("1 - change personal data, 2 - change phone number, "
               "3 - add new phone number, 0 - main menu")
 
     def loop(self):
         event = self.read_event()
         if event == '1':
-            birth_date = CLI.get_field("birth date", Validation.birth_date)
-            self.person.update(birth_date=birth_date)
-            print("Date of birth has been successfully changed")
-            self.next_state = UpdateUser(self.person)
+            first_name = CLI.get_field("first name", Validation.name, may_be_empty=True)
+            last_name = CLI.get_field("last name", Validation.name, may_be_empty=True)
+            birth_date = CLI.get_field("birth date", Validation.birth_date, may_be_empty=True)
+            if first_name is not None:
+                self.person.first_name = first_name
+            if last_name is not None:
+                self.person.last_name = last_name
+            if birth_date is not None:
+                self.person.birth_date = birth_date
+            if first_name or last_name or birth_date:
+                self.person.save()
+                print(">> Personal data has been successfully changed")
+            else:
+                print(">> You have not entered any fields to change")
+            self.next_state = MainMenu()
         elif event == '2':
-            pass
+            for phone in self.person.phones:
+                if phone.type == 'default':
+                    phone.delete_instance()
+            self.next_state = CreatePhone(self.person, phone_type='default')
         elif event == '3':
             self.next_state = CreatePhone(self.person)
         elif event == '0':
@@ -247,66 +332,3 @@ if __name__ == '__main__':
         if current.quit:
             break
         current = current.next_state
-
-# if __name__ == '__main__1':
-#     db.connect()
-#     db.create_tables([Person, Phone])
-#     print(f"Phonebook by @6a16ec v {version}")
-#     while True:
-#         command = input(f"Enter command >> ")
-#         command = normalize(command)
-#         if command == '0':
-#             first_name, last_name = CLI.get_names()
-#             birth_date = CLI.get_field("birth date", Validation.birth_date, may_be_empty=True)
-#             try:
-#                 if birth_date:
-#                     person = Person.create(first_name=first_name, last_name=last_name, birth_date=birth_date)
-#                 else:
-#                     person = Person.create(first_name=first_name, last_name=last_name)
-#                 phone_number = CLI.get_field("phone number", Validation.phone_number)
-#                 try:
-#                     Phone.create(number=phone_number, owner=person)
-#                 except IntegrityError:
-#                     phone = Phone.get(Phone.number == phone_number)
-#                     print(f"This number belongs to {phone.owner.first_name} {phone.owner.last_name}")
-#             except IntegrityError:
-#                 person = Person.get(Person.first_name == first_name, Person.last_name == last_name)
-#                 print("There's already an entry for this person.")
-#                 command = input("1 - change birth date, 2 - change phone number, "
-#                                 "3 - add new phone number, enter - main menu")
-#                 command = normalize(command)
-#                 if command == '1':
-#                     birth_date = CLI.get_field("birth date", Validation.birth_date)
-#                     person.update(birth_date=birth_date)
-#                 elif command == '2':
-#                     phone_number
-#                     person.update(first_name=first_name, last_name=last_name)
-#         # elif command == '1':
-#         #     persons = Person.select().execute()
-#         #     for person in persons:
-#         #         phones = person.phones
-#         #         print(f"{person.first_name} {person.last_name} {person.birth_date} ({len(phones)} phones): ")
-#         #         for phone in phones:
-#         #             print(f"\t{phone.number} {phone.type}")
-#         #         phones_amount = len(person.phones)
-#         #         print(f"The person was found, he has {phones_amount} numbers.")
-#         #
-#         #         line = input(f"Press 0 to enter the main menu, enter to add a one new phone number.\n>> ")
-#         #         if line == "меню" or line == '0':
-#         #             continue
-#         #     else:
-#         #         person = Person.create(first_name=first_name, last_name=last_name)
-#         #     phone_number = CLI.get_field("phone number", Validation.phone_number)
-#         #     if phone := CLI.is_phone_exists(phone_number):
-#         #         pass
-#         #     else:
-#         #         Phone.create(number=phone_number, owner=person)
-#         # elif string == 'посмотреть все записи' or string == '1':
-#         #     data = Person.select().execute()
-#         #     for person in data:
-#         #         print(f"{person.first_name} {person.last_name}")
-#         #
-#         # for person in data:
-#         #     for phone in person.phones:
-#         #         print(f"{person.first_name}\t{person.last_name}\t{phone.number}\t{phone.type}")
-#         #     print("!")
