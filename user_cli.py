@@ -76,9 +76,42 @@ class Validation:
 
     @staticmethod
     @normalize_input
+    def short_birth_date(line):
+        line = sub(r'[\\/-]', '.', line)
+        if result := fullmatch(r'[\d]{1,2}[.][\d]{1,2}', line):
+            string = result.string
+            day, month = map(int, string.split('.'))
+            try:
+                date = datetime(2020, month, day)
+                return date
+            except ValueError:
+                raise NonExistentDate
+        else:
+            raise WrongDateFormat
+
+    @staticmethod
+    @normalize_input
     def phone_type(line):
         result = fullmatch(r'.+', line)
         return result.string
+
+    @staticmethod
+    @normalize_input
+    def age(line):
+        result = fullmatch(r'\d*', line)
+        try:
+            return int(result.string)
+        except:
+            raise NotOnlyDigits
+
+    @staticmethod
+    @normalize_input
+    def age_symbol(line):
+        result = fullmatch(r'[<>=]', line)
+        if result:
+            return result.string
+
+
 
 
 class CLI:
@@ -128,7 +161,9 @@ class MainMenu(MainState):
         print()
         print('[<< - M A I N  -  M E N U - >>]')
         print('1 - new contact, 2 - show all, 3 - search in phonebook, 4 - delete contact')
-        print('5 - age of person, 6 - change contact, 13 - quit')
+        print('5 - age of person, 6 - change contact, 7 - delete by number')
+        print('8 - find by date, 9 - b-day soon, 10 - find by age')
+        print('13 - quit')
 
     def loop(self):
         event = self.read_event()
@@ -171,6 +206,7 @@ class MainMenu(MainState):
             else:
                 person.delete_instance(recursive=True)
                 print("This contact has been successfully removed")
+            self.next_state = MainMenu()
         elif event == '5':
             first_name = CLI.get_field("first name", Validation.name)
             last_name = CLI.get_field("last name", Validation.name)
@@ -197,6 +233,70 @@ class MainMenu(MainState):
                 self.next_state = MainMenu()
             else:
                 self.next_state = UpdateUser(person)
+        elif event == '7':
+            phone_number = CLI.get_field("phone number", Validation.phone_number)
+            person = Person.select().join(Phone).where(Phone.number == phone_number)
+            person = person[0] if person else None
+            if person:
+                person.delete_instance()
+                print('>> Deleted')
+            else:
+                print('>> Records with this number were not found')
+            self.next_state = MainMenu()
+
+        elif event == '8':
+            short_birth_date = CLI.get_field("short birth date (dd.mm)", Validation.short_birth_date)
+            persons = Person.select().where(
+                Person.birth_date.day == short_birth_date.day,
+                Person.birth_date.month == short_birth_date.month
+            )
+            if persons:
+                for person in persons:
+                    print(person)
+            else:
+                print('>> People with such dates of birth are not found')
+            self.next_state = MainMenu()
+
+        elif event == '9':
+            count = 0
+            today = date.today()
+            persons = Person.select()
+            for person in persons:
+                birth_date = person.birth_date
+                if birth_date:
+                    birth_date = date(today.year, birth_date.month, birth_date.day)
+                    delta = birth_date - date.today()
+                    if delta.days < 0:
+                        birth_date = date(today.year + 1, birth_date.month, birth_date.day)
+                        delta = birth_date - date.today()
+                    if delta.days <= 30:
+                        print(person)
+                        count += 1
+            if count == 0:
+                print('>> No one has a birthday in the next month.')
+            self.next_state = MainMenu()
+
+        elif event == '10':
+            input_age = CLI.get_field("step_age", Validation.age)
+            print('>> Enter < or > or =')
+            symbol = CLI.get_field("symbol", Validation.age_symbol)
+            today = date.today()
+            persons = Person.select()
+            for person in persons:
+                birth_date = person.birth_date
+                if birth_date:
+                    person_age = (today.year - birth_date.year)
+                    if birth_date.month > today.month or (birth_date.month == today.month and birth_date.day >= today.day):
+                        person_age += 1
+                    if (person_age < input_age and symbol == '<') or (person_age == input_age and symbol == '=') or \
+                            (person_age > input_age and symbol == '>'):
+                        print(person)
+                        print(f"Age: {person_age}")
+            self.next_state = MainMenu()
+
+
+
+
         elif event == '13':
             self.next_state = True
             self.quit = True
